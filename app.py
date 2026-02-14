@@ -93,6 +93,45 @@ def get_next_host() -> str:
         logger.info(f"Routing request to: {host}")
         return host
 
+# ────────────────────────────────────────────────
+# Admin endpoints (must be defined before catch-all route)
+# ────────────────────────────────────────────────
+
+@app.post("/admin/pull")
+def admin_pull(model: ModelCommand):
+    results = {}
+    with lock:
+        for host in ollama_hosts[:]:  # copy to avoid modification during iteration
+            start = time.time()
+            try:
+                r = requests.post(
+                    f"{host}/api/pull",
+                    json={"model": model.model},
+                    timeout=600,
+                    stream=True
+                )
+                r.raise_for_status()
+                results[host] = "success"
+                logger.info(f"Pull success on {host} | {time.time()-start:.2f}s")
+            except Exception as e:
+                results[host] = f"failed: {str(e)}"
+                logger.error(f"Pull failed on {host} | {time.time()-start:.2f}s | {str(e)}")
+    return {"results": results}
+
+
+@app.get("/admin/list_models")
+def admin_list_models():
+    results = {}
+    with lock:
+        for host in ollama_hosts:
+            try:
+                response = requests.get(f"{host}/api/tags", timeout=15)
+                response.raise_for_status()
+                results[host] = response.json()
+            except requests.RequestException as e:
+                results[host] = f"failed: {str(e)}"
+    return {"results": results}
+
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def proxy(request: Request, path: str):
     start_total = time.time()
@@ -132,45 +171,6 @@ async def proxy(request: Request, path: str):
                 raise HTTPException(status_code=503, detail="All available hosts failed")
 
             current_host = next_candidate
-
-# ────────────────────────────────────────────────
-# Admin endpoints
-# ────────────────────────────────────────────────
-
-@app.post("/admin/pull")
-def admin_pull(model: ModelCommand):
-    results = {}
-    with lock:
-        for host in ollama_hosts[:]:  # copy to avoid modification during iteration
-            start = time.time()
-            try:
-                r = requests.post(
-                    f"{host}/api/pull",
-                    json={"model": model.model},
-                    timeout=600,
-                    stream=True
-                )
-                r.raise_for_status()
-                results[host] = "success"
-                logger.info(f"Pull success on {host} | {time.time()-start:.2f}s")
-            except Exception as e:
-                results[host] = f"failed: {str(e)}"
-                logger.error(f"Pull failed on {host} | {time.time()-start:.2f}s | {str(e)}")
-    return {"results": results}
-
-
-@app.get("/admin/list_models")
-def admin_list_models():
-    results = {}
-    with lock:
-        for host in ollama_hosts:
-            try:
-                response = requests.get(f"{host}/api/tags", timeout=15)
-                response.raise_for_status()
-                results[host] = response.json()
-            except requests.RequestException as e:
-                results[host] = f"failed: {str(e)}"
-    return {"results": results}
 
 
 if __name__ == "__main__":
